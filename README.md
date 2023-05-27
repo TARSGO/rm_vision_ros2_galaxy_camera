@@ -10,3 +10,6 @@ Based on HikVision camera package from the aforementioned project. When used in 
 ros2 launch galaxy_camera galaxy_camera.launch.py
 ```
 
+## Notes
+
+This package is experimental, and its integration into real world RoboMaster applications has not been thoroughly tested. Issue reports welcomed.
