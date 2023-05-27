@@ -1,0 +1,6 @@
+/galaxy_camera:
+  ros__parameters:
+    camera_name: narrow_stereo
+
+    exposure_time: 3500
+    gain: 1.0
