@@ -6,6 +6,7 @@
 #include <camera_info_manager/camera_info_manager.hpp>
 #include <image_transport/image_transport.hpp>
 #include <rclcpp/logging.hpp>
+#include <rclcpp/parameter_value.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp/utilities.hpp>
 #include <sensor_msgs/msg/camera_info.hpp>
@@ -18,7 +19,7 @@ namespace galaxy_camera
 class GalaxyCameraNode : public rclcpp::Node
 {
 public:
-  explicit GalaxyCameraNode(const rclcpp::NodeOptions & options) : Node("galaxy_camera", options)  
+  explicit GalaxyCameraNode(const rclcpp::NodeOptions & options) : Node("galaxy_camera", options)
   {
     GX_STATUS status;
     RCLCPP_INFO(this->get_logger(), "Starting GalaxyCameraNode!");
@@ -100,11 +101,11 @@ public:
       while (rclcpp::ok()) {
         // Fetch image
         status = GXGetImage(camera_handle_, &bayer_frame, 500);
-        
+
         if (GX_SUCCESS(status)) {
           DX_PIXEL_COLOR_FILTER bayer_type;
           switch (bayer_frame.nPixelFormat) {
-          	case GX_PIXEL_FORMAT_BAYER_GR8: bayer_type = BAYERGR; break;
+                case GX_PIXEL_FORMAT_BAYER_GR8: bayer_type = BAYERGR; break;
             case GX_PIXEL_FORMAT_BAYER_RG8: bayer_type = BAYERRG; break;
             case GX_PIXEL_FORMAT_BAYER_GB8: bayer_type = BAYERGB; break;
             case GX_PIXEL_FORMAT_BAYER_BG8: bayer_type = BAYERBG; break;
@@ -168,6 +169,7 @@ private:
     rcl_interfaces::msg::ParameterDescriptor param_desc;
     double f_value;
     GX_FLOAT_RANGE f_range;
+    GX_STATUS status;
     param_desc.integer_range.resize(1);
     param_desc.integer_range[0].step = 1;
     // Exposure time
@@ -176,9 +178,20 @@ private:
     GXGetFloatRange(camera_handle_, GX_FLOAT_EXPOSURE_TIME, &f_range);
     param_desc.integer_range[0].from_value = f_range.dMin;
     param_desc.integer_range[0].to_value = f_range.dMax;
+    RCLCPP_INFO(this->get_logger(), "Exposure time: %f, range %f ~ %f", f_value, f_range.dMin, f_range.dMax);
+    status = GXSetEnum(camera_handle_, GX_ENUM_EXPOSURE_AUTO, GX_EXPOSURE_AUTO_OFF); // Disable auto exposure
+    if (!GX_SUCCESS(status)) {
+      RCLCPP_ERROR(this->get_logger(), "Failed to disable auto exposure, status = %d", status);
+    }
+    status = GXSetEnum(camera_handle_, GX_ENUM_EXPOSURE_MODE, GX_EXPOSURE_MODE_TIMED); // Set exposure to timed mode
+    if (!GX_SUCCESS(status)) {
+      RCLCPP_ERROR(this->get_logger(), "Failed to set exposure to timed mode, status = %d", status);
+    }
     double exposure_time = this->declare_parameter("exposure_time", 5000, param_desc);
-    GXSetFloat(camera_handle_, GX_FLOAT_EXPOSURE_TIME, exposure_time);
-    RCLCPP_INFO(this->get_logger(), "Exposure time: %f", exposure_time);
+    status = GXSetFloat(camera_handle_, GX_FLOAT_EXPOSURE_TIME, exposure_time);
+    if (!GX_SUCCESS(status)) {
+      RCLCPP_ERROR(this->get_logger(), "Failed to set exposure time, status = %d", status);
+    }
 
     // Gain
     param_desc.description = "Gain";
@@ -186,9 +199,20 @@ private:
     GXGetFloatRange(camera_handle_, GX_FLOAT_GAIN, &f_range);
     param_desc.integer_range[0].from_value = f_range.dMin;
     param_desc.integer_range[0].to_value = f_range.dMax;
-    double gain = this->declare_parameter("gain", f_value, param_desc);
-    GXSetFloat(camera_handle_, GX_FLOAT_GAIN, gain);
-    RCLCPP_INFO(this->get_logger(), "Gain: %f", gain);
+    RCLCPP_INFO(this->get_logger(), "Gain: %f, range %f ~ %f", f_value, f_range.dMin, f_range.dMax);
+    double gain = this->declare_parameter("gainn", f_value, param_desc);
+    status = GXSetEnum(camera_handle_, GX_ENUM_GAIN_AUTO, GX_GAIN_AUTO_OFF); // Disable auto gain
+    if (!GX_SUCCESS(status)) {
+      RCLCPP_ERROR(this->get_logger(), "Failed to disable auto gain, status = %d", status);
+    }
+    status = GXSetEnum(camera_handle_, GX_ENUM_GAIN_SELECTOR, GX_GAIN_SELECTOR_ALL); // Gain for all channels
+    if (!GX_SUCCESS(status)) {
+      RCLCPP_ERROR(this->get_logger(), "Failed to select gain for all channels, status = %d", status);
+    }
+    status = GXSetFloat(camera_handle_, GX_FLOAT_GAIN, gain);
+    if (!GX_SUCCESS(status)) {
+      RCLCPP_ERROR(this->get_logger(), "Failed to set gain, status = %d", status);
+    }
   }
 
   rcl_interfaces::msg::SetParametersResult parametersCallback(
@@ -197,22 +221,28 @@ private:
     rcl_interfaces::msg::SetParametersResult result;
     result.successful = true;
     GX_STATUS status;
+    RCLCPP_ERROR(this->get_logger(), "parametersCallback!");
     for (const auto & param : parameters) {
-      if (param.get_name() == "exposure_time") {
-        status = GXSetFloat(camera_handle_, GX_FLOAT_EXPOSURE_TIME, param.as_int());
-        if (GX_SUCCESS(status)) {
+      try {
+        if (param.get_name() == "exposure_time") {
+          status = GXSetFloat(camera_handle_, GX_FLOAT_EXPOSURE_TIME, param.as_int());
+          if (!GX_SUCCESS(status)) {
+            result.successful = false;
+            result.reason = "Failed to set exposure time, status = " + std::to_string(status);
+          }
+        } else if (param.get_name() == "gainn") {
+          status = GXSetFloat(camera_handle_, GX_FLOAT_GAIN, param.as_double());
+          if (!GX_SUCCESS(status)) {
+            result.successful = false;
+            result.reason = "Failed to set gain, status = " + std::to_string(status);
+          }
+        } else {
           result.successful = false;
-          result.reason = "Failed to set exposure time, status = " + std::to_string(status);
+          result.reason = "Unknown parameter: " + param.get_name();
         }
-      } else if (param.get_name() == "gain") {
-        status = GXSetFloat(camera_handle_, GX_FLOAT_GAIN, param.as_double());
-        if (GX_SUCCESS(status)) {
-          result.successful = false;
-          result.reason = "Failed to set gain, status = " + std::to_string(status);
-        }
-      } else {
-        result.successful = false;
-        result.reason = "Unknown parameter: " + param.get_name();
+        RCLCPP_INFO(this->get_logger(), "Parameter set %s: %s",(result.successful ? "successfully" : "failed"), param.get_name().c_str());
+      } catch (rclcpp::ParameterTypeException &e) {
+        RCLCPP_ERROR(this->get_logger(), "Error setting parameter \"%s\": %s", param.get_name().c_str(), e.what());
       }
     }
     return result;
